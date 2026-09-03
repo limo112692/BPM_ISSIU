@@ -13,8 +13,8 @@
     <script src="https://cdn.jsdelivr.net/npm/luckysheet/dist/luckysheet.umd.js"></script>
     <style>
         body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        #toolbar { padding: 10px 15px; background: #24292e; color: white; display: flex; gap: 15px; align-items: center; }
-        #toolbar button { padding: 8px 18px; background: #2ea44f; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px; }
+        #toolbar { padding: 10px 15px; background: #24292e; color: white; display: flex; gap: 15px; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        #toolbar button { padding: 8px 18px; background: #2ea44f; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px; transition: background 0.2s; }
         #toolbar button:hover { background: #2c974b; }
         #status { font-size: 14px; color: #adbac7; }
         #luckysheet { margin: 0px; padding: 0px; position: absolute; width: 100%; left: 0px; top: 52px; bottom: 0px; }
@@ -35,13 +35,15 @@
         const t2 = "udtgQlruwSDi4QBATajPQzQXXJucYjboKWuRTtsJ8XQDAWZX7WJFrSWhsH9";
         const GH_TOKEN = t1 + t2;
 
-        // ⚠️ 請填入你的 GitHub 帳號名稱
-        const OWNER = 'limo112692';
+        // ⚠️ 請務必確認 '你的GitHub帳號' 已替換為您實際的 GitHub 使用者名稱 ( Username )
+        const OWNER = 'limo112692   ';
         const REPO = 'BPM_ISSIU';
         const FILE_PATH = 'data.json';
-        let currentSha = '';
 
-        // 頁面載入時自動讀取資料
+        let currentSha = '';
+        let isDirty = false; // 紀錄是否有未儲存的變更
+
+        // 1. 頁面載入時自動讀取資料
         window.onload = async function() {
             document.getElementById('status').innerText = '⏳ 讀取資料中...';
             try {
@@ -53,7 +55,7 @@
                 const content = decodeURIComponent(escape(atob(fileData.content)));
                 let sheetData = content ? JSON.parse(content) : [];
 
-                // 首次開啟時預設初始化表頭
+                // 首次開啟若無資料，預設初始化表頭格式
                 if (sheetData.length === 0) {
                     sheetData = [{
                         "name": "議題追蹤表",
@@ -73,27 +75,56 @@
                     container: 'luckysheet',
                     lang: 'zh',
                     data: sheetData,
-                    showinfobar: false
+                    showinfobar: false,
+                    hook: {
+                        // 只要儲存格被修改，即設為編輯狀態
+                        cellUpdated: function() {
+                            isDirty = true;
+                            document.getElementById('status').innerText = '⚠️ 有未儲存的變更';
+                        }
+                    }
                 });
                 document.getElementById('status').innerText = '✅ 資料載入完成';
             } catch (err) {
                 console.error(err);
-                document.getElementById('status').innerText = '❌ 載入失敗，請確認檔名與 GitHub 帳號設定。';
+                document.getElementById('status').innerText = '❌ 載入失敗，請確認檔名或 GitHub 帳號設定。';
             }
         };
 
-        // 儲存資料回 GitHub
+        // 2. 儲存資料回 GitHub（包含最新版本偵測與衝突檢查）
         async function saveData() {
-            document.getElementById('status').innerText = '⏳ 儲存中...';
-            
-            // 取得表格當前全部數據
-            const gridData = luckysheet.getluckysheetfile();
-            const jsonString = JSON.stringify(gridData);
-            
-            // 轉成 Base64
-            const base64Content = btoa(unescape(encodeURIComponent(jsonString)));
+            document.getElementById('status').innerText = '⏳ 正在檢查版本並儲存...';
 
             try {
+                // 儲存前先檢查 GitHub 伺服器上的最新 SHA
+                const checkRes = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${FILE_PATH}`);
+                const latestFileData = await checkRes.json();
+                const latestSha = latestFileData.sha;
+
+                // 比對是否有版本衝突
+                if (currentSha && latestSha !== currentSha) {
+                    const confirmOverwrite = confirm(
+                        "⚠️ 注意：其他人（或廠商）剛才已經更新了這份表格！\n\n" +
+                        "如果您現在儲存，將會【覆蓋掉對方剛才儲存的內容】。\n\n" +
+                        "• 按下 [確定]：強制覆蓋，以您目前的內容為主。\n" +
+                        "• 按下 [取消]：放棄儲存，建議您先複製目前的內容，重新整理頁面後再貼上。"
+                    );
+
+                    if (!confirmOverwrite) {
+                        document.getElementById('status').innerText = '❌ 已取消儲存（避免覆蓋他人版本）';
+                        return;
+                    }
+
+                    // 強制覆蓋時，將本地 SHA 更新為伺服器最新 SHA 以通過驗證
+                    currentSha = latestSha;
+                }
+
+                // 取得表格當前數據並轉碼
+                const gridData = luckysheet.getluckysheetfile();
+                const jsonString = JSON.stringify(gridData);
+                const base64Content = btoa(unescape(encodeURIComponent(jsonString)));
+
+                // 發送 PUT 請求寫回 GitHub
                 const response = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${FILE_PATH}`, {
                     method: 'PUT',
                     headers: {
@@ -109,7 +140,8 @@
 
                 if (response.ok) {
                     const resData = await response.json();
-                    currentSha = resData.content.sha; // 更新最新的 SHA 值
+                    currentSha = resData.content.sha; // 更新最新的 SHA
+                    isDirty = false; // 重置未儲存狀態
                     document.getElementById('status').innerText = '🎉 儲存成功！';
                     setTimeout(() => document.getElementById('status').innerText = '✅ 資料載入完成', 3000);
                 } else {
@@ -119,10 +151,18 @@
                 }
             } catch (err) {
                 console.error(err);
-                alert('網路請求失敗。');
+                alert('網路請求失敗，請檢查連線。');
                 document.getElementById('status').innerText = '❌ 儲存失敗';
             }
         }
+
+        // 3. 離頁提醒：未儲存時關閉分頁或重新整理會跳出警告
+        window.addEventListener('beforeunload', function (e) {
+            if (isDirty) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
     </script>
 </body>
 </html>
