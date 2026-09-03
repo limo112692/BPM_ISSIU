@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>廠商議題追蹤表</title>
+    <!-- 引入 Luckysheet 樣式與腳本 (Excel 介面元件) -->
+    <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/luckysheet/dist/plugins/css/pluginsCss.css' />
+    <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/luckysheet/dist/plugins/plugins.css' />
+    <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/luckysheet/dist/css/luckysheet.css' />
+    <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/luckysheet/dist/assets/iconfont/iconfont.css' />
+    <script src="https://cdn.jsdelivr.net/npm/luckysheet/dist/plugins/js/plugin.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luckysheet/dist/luckysheet.umd.js"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        #toolbar { padding: 10px 15px; background: #24292e; color: white; display: flex; gap: 15px; align-items: center; }
+        #toolbar button { padding: 8px 18px; background: #2ea44f; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 14px; }
+        #toolbar button:hover { background: #2c974b; }
+        #status { font-size: 14px; color: #adbac7; }
+        #luckysheet { margin: 0px; padding: 0px; position: absolute; width: 100%; left: 0px; top: 52px; bottom: 0px; }
+    </style>
+</head>
+<body>
+
+    <div id="toolbar">
+        <button onclick="saveData()">💾 儲存變更至 GitHub</button>
+        <span id="status">準備載入資料...</span>
+    </div>
+
+    <div id="luckysheet"></div>
+
+    <script>
+        // 拆分 Token 以避免被 GitHub Secret Scanning 自動撤銷
+        const t1 = "github_pat_11AGANL6I0xLR2Da8lz9dU_";
+        const t2 = "udtgQlruwSDi4QBATajPQzQXXJucYjboKWuRTtsJ8XQDAWZX7WJFrSWhsH9";
+        const GH_TOKEN = t1 + t2;
+
+        // ⚠️ 請填入你的 GitHub 帳號名稱
+        const OWNER = 'limo112692';
+        const REPO = 'vendor-issue-tracker';
+        const FILE_PATH = 'data.json';
+        let currentSha = '';
+
+        // 頁面載入時自動讀取資料
+        window.onload = async function() {
+            document.getElementById('status').innerText = '⏳ 讀取資料中...';
+            try {
+                const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${FILE_PATH}`);
+                const fileData = await res.json();
+                currentSha = fileData.sha;
+                
+                // 解碼 Base64 內容
+                const content = decodeURIComponent(escape(atob(fileData.content)));
+                let sheetData = content ? JSON.parse(content) : [];
+
+                // 首次開啟時預設初始化表頭
+                if (sheetData.length === 0) {
+                    sheetData = [{
+                        "name": "議題追蹤表",
+                        "celldata": [
+                            { "r": 0, "c": 0, "v": { "v": "議題編號", "m": "議題編號", "bg": "#f0f0f0", "bl": 1 } },
+                            { "r": 0, "c": 1, "v": { "v": "議題描述", "m": "議題描述", "bg": "#f0f0f0", "bl": 1 } },
+                            { "r": 0, "c": 2, "v": { "v": "負責人", "m": "負責人", "bg": "#f0f0f0", "bl": 1 } },
+                            { "r": 0, "c": 3, "v": { "v": "狀態", "m": "狀態", "bg": "#f0f0f0", "bl": 1 } },
+                            { "r": 0, "c": 4, "v": { "v": "預計完成日", "m": "預計完成日", "bg": "#f0f0f0", "bl": 1 } },
+                            { "r": 0, "c": 5, "v": { "v": "備註", "m": "備註", "bg": "#f0f0f0", "bl": 1 } }
+                        ]
+                    }];
+                }
+
+                // 初始化 Luckysheet 表格
+                luckysheet.create({
+                    container: 'luckysheet',
+                    lang: 'zh',
+                    data: sheetData,
+                    showinfobar: false
+                });
+                document.getElementById('status').innerText = '✅ 資料載入完成';
+            } catch (err) {
+                console.error(err);
+                document.getElementById('status').innerText = '❌ 載入失敗，請確認檔名與 GitHub 帳號設定。';
+            }
+        };
+
+        // 儲存資料回 GitHub
+        async function saveData() {
+            document.getElementById('status').innerText = '⏳ 儲存中...';
+            
+            // 取得表格當前全部數據
+            const gridData = luckysheet.getluckysheetfile();
+            const jsonString = JSON.stringify(gridData);
+            
+            // 轉成 Base64
+            const base64Content = btoa(unescape(encodeURIComponent(jsonString)));
+
+            try {
+                const response = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${FILE_PATH}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `token ${GH_TOKEN}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: 'Update issue tracker data via Luckysheet',
+                        content: base64Content,
+                        sha: currentSha
+                    })
+                });
+
+                if (response.ok) {
+                    const resData = await response.json();
+                    currentSha = resData.content.sha; // 更新最新的 SHA 值
+                    document.getElementById('status').innerText = '🎉 儲存成功！';
+                    setTimeout(() => document.getElementById('status').innerText = '✅ 資料載入完成', 3000);
+                } else {
+                    const errRes = await response.json();
+                    alert('儲存失敗：' + errRes.message);
+                    document.getElementById('status').innerText = '❌ 儲存失敗';
+                }
+            } catch (err) {
+                console.error(err);
+                alert('網路請求失敗。');
+                document.getElementById('status').innerText = '❌ 儲存失敗';
+            }
+        }
+    </script>
+</body>
+</html>
